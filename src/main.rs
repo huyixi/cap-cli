@@ -1,11 +1,21 @@
 use anyhow::Result;
 use chrono::Local;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rusqlite::{Connection, params};
 
 #[derive(Parser)]
-struct Args {
-    content: String,
+#[command(name = "cap")]
+#[command(about = "A tiny note app")]
+struct Cli {
+    content: Vec<String>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    List,
 }
 
 fn init_db(conn: &Connection) -> Result<()> {
@@ -31,10 +41,41 @@ fn add_note(conn: &Connection, content: &str) -> Result<()> {
     Ok(())
 }
 
+fn list_notes(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT created_at, content
+         FROM notes
+         ORDER BY created_at DESC
+         LIMIT 10",
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    for row in rows {
+        let (created_at, content) = row?;
+        println!("{}  {}", created_at, content);
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let cli = Cli::parse();
     let conn = Connection::open("notes.db")?;
     init_db(&conn)?;
-    add_note(&conn, &args.content)?;
+
+    match (cli.content, cli.command) {
+        (_, Some(Command::List)) => list_notes(&conn)?,
+        (content, None) if !content.is_empty() => {
+            let text = content.join(" ");
+            add_note(&conn, &text)?;
+        }
+        _ => {
+            eprintln!("Nothing to do. Try `cap hello world` or `cap list`.");
+        }
+    }
+
     Ok(())
 }
