@@ -1,1 +1,55 @@
-/target
+# Dependency directories
+node_modules/
+
+# Logs
+*.log
+*-debug.log
+*-error.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+
+# Build outputs
+dist/
+build/
+public/
+.next/
+target/
+
+# Cache
+.cache/
+__pycache__/
+
+# Local env files
+*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Mac OS specific
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# Mac OS thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB/
+.AppleDesktop/
+Network Trash Folder/
+Temporary Items/
+.apdisk
