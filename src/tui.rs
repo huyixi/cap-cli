@@ -64,8 +64,38 @@ fn run_tui_loop(
 fn draw_tui(frame: &mut Frame<'_>, state: &TuiState) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
         .split(frame.area());
+
+    let search_title = format!(
+        "Search{} (Tab switch, Esc/q exit)",
+        if matches!(state.focus, Focus::Search) {
+            " [active]"
+        } else {
+            ""
+        }
+    );
+    let search_border_style = if matches!(state.focus, Focus::Search) {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default()
+    };
+    let search_widget = Paragraph::new(state.search.query.as_str())
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(search_title)
+                .border_style(search_border_style),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(search_widget, areas[0]);
+    if matches!(state.focus, Focus::Search) {
+        frame.set_cursor_position(state.search.cursor_position(areas[0]));
+    }
 
     let input_lines: Vec<Line> = state
         .input
@@ -105,9 +135,9 @@ fn draw_tui(frame: &mut Frame<'_>, state: &TuiState) {
                 .border_style(input_border_style),
         )
         .wrap(Wrap { trim: false });
-    frame.render_widget(input_widget, areas[0]);
+    frame.render_widget(input_widget, areas[2]);
     if matches!(state.focus, Focus::Input) {
-        frame.set_cursor_position(state.input.cursor_position(areas[0]));
+        frame.set_cursor_position(state.input.cursor_position(areas[2]));
     }
 
     let history_items: Vec<ListItem> = state
@@ -175,10 +205,10 @@ fn handle_tui_key(
         {
             if matches!(state.focus, Focus::Input) && !state.input.is_empty() {
                 crate::add_memo(conn, &state.input.text())?;
-                state.history = crate::fetch_recent_memos(conn, HISTORY_LIMIT)?;
+                state.all_history = crate::fetch_recent_memos(conn, HISTORY_LIMIT)?;
+                state.apply_search();
                 state.input.clear();
                 state.input.set_status("Saved!");
-                state.history_index = state.first_history_index();
             }
             Ok(false)
         }
@@ -205,14 +235,24 @@ fn handle_tui_key(
             Ok(false)
         }
         (KeyCode::Backspace, _) => {
-            if matches!(state.focus, Focus::Input) {
-                state.input.backspace();
+            match state.focus {
+                Focus::Input => state.input.backspace(),
+                Focus::Search => {
+                    state.search.backspace();
+                    state.apply_search();
+                }
+                Focus::History => {}
             }
             Ok(false)
         }
         (KeyCode::Char(ch), _) => {
-            if matches!(state.focus, Focus::Input) {
-                state.input.insert_char(ch);
+            match state.focus {
+                Focus::Input => state.input.insert_char(ch),
+                Focus::Search => {
+                    state.search.insert_char(ch);
+                    state.apply_search();
+                }
+                Focus::History => {}
             }
             Ok(false)
         }
@@ -222,32 +262,39 @@ fn handle_tui_key(
 
 #[derive(Copy, Clone)]
 enum Focus {
+    Search,
     Input,
     History,
 }
 
 struct TuiState {
+    search: SearchState,
     input: InputState,
     history: Vec<(String, String)>,
+    all_history: Vec<(String, String)>,
     focus: Focus,
     history_index: Option<usize>,
 }
 
 impl TuiState {
     fn new(history: Vec<(String, String)>) -> Self {
-        let history_index = if history.is_empty() { None } else { Some(0) };
-        Self {
+        let mut state = Self {
+            search: SearchState::new(),
             input: InputState::new(),
-            history,
+            history: Vec::new(),
+            all_history: history,
             focus: Focus::Input,
-            history_index,
-        }
+            history_index: None,
+        };
+        state.apply_search();
+        state
     }
 
     fn toggle_focus(&mut self) {
         self.focus = match self.focus {
-            Focus::Input => Focus::History,
+            Focus::Search => Focus::History,
             Focus::History => Focus::Input,
+            Focus::Input => Focus::Search,
         };
     }
 
@@ -257,6 +304,24 @@ impl TuiState {
         } else {
             Some(0)
         }
+    }
+
+    fn apply_search(&mut self) {
+        if self.search.query.is_empty() {
+            self.history = self.all_history.clone();
+        } else {
+            let needle = self.search.query.to_lowercase();
+            self.history = self
+                .all_history
+                .iter()
+                .filter(|(created_at, content)| {
+                    content.to_lowercase().contains(&needle)
+                        || created_at.to_lowercase().contains(&needle)
+                })
+                .cloned()
+                .collect();
+        }
+        self.history_index = self.first_history_index();
     }
 
     fn move_history_selection_up(&mut self) {
@@ -278,6 +343,31 @@ impl TuiState {
         if current < max_index {
             self.history_index = Some(current + 1);
         }
+    }
+}
+
+struct SearchState {
+    query: String,
+}
+
+impl SearchState {
+    fn new() -> Self {
+        Self {
+            query: String::new(),
+        }
+    }
+
+    fn insert_char(&mut self, ch: char) {
+        self.query.push(ch);
+    }
+
+    fn backspace(&mut self) {
+        self.query.pop();
+    }
+
+    fn cursor_position(&self, area: Rect) -> (u16, u16) {
+        let col = self.query.chars().count() as u16;
+        (area.x + col + 1, area.y + 1)
     }
 }
 
