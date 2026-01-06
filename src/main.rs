@@ -4,6 +4,8 @@ use clap::{ArgAction, Parser, Subcommand};
 use rusqlite::{Connection, params};
 use std::{env, fs, path::PathBuf};
 
+mod tui;
+
 #[derive(Parser)]
 #[command(name = "cap")]
 #[command(about = "A tiny memo app", version)]
@@ -19,7 +21,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Add { content: String },
+    Add {
+        content: String,
+    },
     Version,
     #[command(alias = "ls")]
     List,
@@ -38,34 +42,41 @@ fn init_db(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn add_memo(conn: &Connection, content: &str) -> Result<()> {
+pub(crate) fn add_memo(conn: &Connection, content: &str) -> Result<()> {
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(
         "INSERT INTO memos (content, created_at, updated_at) VALUES (?1, ?2, ?3)",
         params![content, now, now],
     )?;
-    println!("Saved!");
     Ok(())
 }
 
 fn list_memos(conn: &Connection) -> Result<()> {
-    let mut stmt = conn.prepare(
-        "SELECT created_at, content
-         FROM memos
-         ORDER BY created_at DESC
-         LIMIT 10",
-    )?;
-
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-
-    for row in rows {
-        let (created_at, content) = row?;
+    let memos = fetch_recent_memos(conn, 10)?;
+    for (created_at, content) in memos {
         println!("{}  {}", created_at, content);
     }
 
     Ok(())
+}
+
+pub(crate) fn fetch_recent_memos(conn: &Connection, limit: usize) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT created_at, content
+         FROM memos
+         ORDER BY created_at DESC
+         LIMIT ?1",
+    )?;
+
+    let rows = stmt.query_map(params![limit as i64], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut memos = Vec::new();
+    for row in rows {
+        memos.push(row?);
+    }
+    Ok(memos)
 }
 
 fn db_path() -> Result<PathBuf> {
@@ -89,9 +100,7 @@ fn main() -> Result<()> {
         None if cli.content.is_some() => {
             add_memo(&conn, cli.content.as_deref().unwrap_or_default())?
         }
-        _ => {
-            eprintln!("Nothing to do. Try `cap add \"hello world\"` or `cap list`.");
-        }
+        None => tui::run_tui(&conn)?,
     }
 
     Ok(())
