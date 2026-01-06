@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::Local;
 use clap::{Parser, Subcommand};
 use rusqlite::{Connection, params};
+use std::{env, fs, path::PathBuf};
 
 #[derive(Parser)]
 #[command(name = "cap")]
@@ -61,9 +62,16 @@ fn list_memos(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn db_path() -> Result<PathBuf> {
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let dir = PathBuf::from(home).join(".capmind");
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join("memos.db"))
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let conn = Connection::open("memos.db")?;
+    let conn = Connection::open(db_path()?)?;
     init_db(&conn)?;
 
     match (cli.content, cli.command) {
