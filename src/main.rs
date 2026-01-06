@@ -20,7 +20,7 @@ enum Command {
 
 fn init_db(conn: &Connection) -> Result<()> {
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS notes (
+        "CREATE TABLE IF NOT EXISTS memos (
             id INTEGER PRIMARY KEY,
             content TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -34,17 +34,17 @@ fn init_db(conn: &Connection) -> Result<()> {
 fn add_note(conn: &Connection, content: &str) -> Result<()> {
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(
-        "INSERT INTO notes (content, created_at, updated_at) VALUES (?1, ?2, ?3)",
+        "INSERT INTO memos (content, created_at, updated_at) VALUES (?1, ?2, ?3)",
         params![content, now, now],
     )?;
     println!("笔记已保存！");
     Ok(())
 }
 
-fn list_notes(conn: &Connection) -> Result<()> {
+fn list_memos(conn: &Connection) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT created_at, content
-         FROM notes
+         FROM memos
          ORDER BY created_at DESC
          LIMIT 10",
     )?;
@@ -63,11 +63,11 @@ fn list_notes(conn: &Connection) -> Result<()> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let conn = Connection::open("notes.db")?;
+    let conn = Connection::open("memos.db")?;
     init_db(&conn)?;
 
     match (cli.content, cli.command) {
-        (_, Some(Command::List)) => list_notes(&conn)?,
+        (_, Some(Command::List)) => list_memos(&conn)?,
         (content, None) if !content.is_empty() => {
             let text = content.join(" ");
             add_note(&conn, &text)?;

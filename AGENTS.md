@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - `src/main.rs` contains the entire CLI implementation and command routing.
 - `Cargo.toml` and `Cargo.lock` define Rust dependencies and build settings.
-- `notes.db` is the local SQLite database used by the CLI at runtime; treat it as a local artifact, not a source file.
+- `memos.db` is the local SQLite database used by the CLI at runtime; treat it as a local artifact, not a source file.
 - `target/` is Cargo build output (generated).
 
 ## Build, Test, and Development Commands
@@ -19,7 +19,7 @@
 
 ## Testing Guidelines
 - No automated tests are present yet; add unit tests alongside new logic when possible.
-- If you introduce tests, use Rust’s built-in `#[test]` framework and clear names like `adds_note_with_timestamp`.
+- If you introduce tests, use Rust’s built-in `#[test]` framework and clear names like `adds_memo_with_timestamp`.
 - Run `cargo test` before submitting changes.
 
 ## Commit & Pull Request Guidelines
@@ -27,5 +27,5 @@
 - Keep commits focused on one logical change.
 - PRs should include a short summary, steps to verify (commands run), and example usage if CLI behavior changes.
 
-## Security & Data Notes
-- The app writes to `notes.db` in the repo root. Avoid committing personal data; reset or remove local changes to `notes.db` before opening a PR.
+## Security & Data Memos
+- The app writes to `memos.db` in the repo root. Avoid committing personal data; reset or remove local changes to `memos.db` before opening a PR.
