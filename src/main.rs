@@ -1,14 +1,17 @@
 use anyhow::Result;
 use chrono::Local;
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use rusqlite::{Connection, params};
 use std::{env, fs, path::PathBuf};
 
 #[derive(Parser)]
 #[command(name = "cap")]
-#[command(about = "A tiny memo app")]
+#[command(about = "A tiny memo app", version)]
 struct Cli {
     content: Option<String>,
+
+    #[arg(short = 'v', long = "version", action = ArgAction::Version)]
+    version: Option<bool>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -17,6 +20,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Add { content: String },
+    Version,
+    #[command(alias = "ls")]
     List,
 }
 
@@ -77,6 +82,9 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::List) => list_memos(&conn)?,
+        Some(Command::Version) => {
+            println!("cap {}", env!("CARGO_PKG_VERSION"));
+        }
         Some(Command::Add { content }) => add_memo(&conn, &content)?,
         None if cli.content.is_some() => {
             add_memo(&conn, cli.content.as_deref().unwrap_or_default())?
