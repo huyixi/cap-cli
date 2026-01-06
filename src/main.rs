@@ -52,7 +52,7 @@ pub(crate) fn add_memo(conn: &Connection, content: &str) -> Result<()> {
 }
 
 fn list_memos(conn: &Connection) -> Result<()> {
-    let memos = fetch_recent_memos(conn, 10)?;
+    let memos = fetch_memos(conn, None)?;
     for (created_at, content) in memos {
         println!("{}  {}", created_at, content);
     }
@@ -60,7 +60,8 @@ fn list_memos(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn fetch_recent_memos(conn: &Connection, limit: usize) -> Result<Vec<(String, String)>> {
+pub(crate) fn fetch_memos(conn: &Connection, limit: Option<usize>) -> Result<Vec<(String, String)>> {
+    let limit_value = limit.map(|value| value as i64).unwrap_or(-1);
     let mut stmt = conn.prepare(
         "SELECT created_at, content
          FROM memos
@@ -68,7 +69,7 @@ pub(crate) fn fetch_recent_memos(conn: &Connection, limit: usize) -> Result<Vec<
          LIMIT ?1",
     )?;
 
-    let rows = stmt.query_map(params![limit as i64], |row| {
+    let rows = stmt.query_map(params![limit_value], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
 
