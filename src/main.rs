@@ -8,7 +8,7 @@ use std::{env, fs, path::PathBuf};
 #[command(name = "cap")]
 #[command(about = "A tiny memo app")]
 struct Cli {
-    content: Vec<String>,
+    content: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -16,6 +16,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Add { content: String },
     List,
 }
 
@@ -74,14 +75,14 @@ fn main() -> Result<()> {
     let conn = Connection::open(db_path()?)?;
     init_db(&conn)?;
 
-    match (cli.content, cli.command) {
-        (_, Some(Command::List)) => list_memos(&conn)?,
-        (content, None) if !content.is_empty() => {
-            let text = content.join(" ");
-            add_memo(&conn, &text)?;
+    match cli.command {
+        Some(Command::List) => list_memos(&conn)?,
+        Some(Command::Add { content }) => add_memo(&conn, &content)?,
+        None if cli.content.is_some() => {
+            add_memo(&conn, cli.content.as_deref().unwrap_or_default())?
         }
         _ => {
-            eprintln!("Nothing to do. Try `cap hello world` or `cap list`.");
+            eprintln!("Nothing to do. Try `cap add \"hello world\"` or `cap list`.");
         }
     }
 
