@@ -5,7 +5,7 @@ use rusqlite::{Connection, params};
 
 #[derive(Parser)]
 #[command(name = "cap")]
-#[command(about = "A tiny note app")]
+#[command(about = "A tiny memo app")]
 struct Cli {
     content: Vec<String>,
 
@@ -31,13 +31,13 @@ fn init_db(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn add_note(conn: &Connection, content: &str) -> Result<()> {
+fn add_memo(conn: &Connection, content: &str) -> Result<()> {
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(
         "INSERT INTO memos (content, created_at, updated_at) VALUES (?1, ?2, ?3)",
         params![content, now, now],
     )?;
-    println!("笔记已保存！");
+    println!("Saved!");
     Ok(())
 }
 
@@ -70,7 +70,7 @@ fn main() -> Result<()> {
         (_, Some(Command::List)) => list_memos(&conn)?,
         (content, None) if !content.is_empty() => {
             let text = content.join(" ");
-            add_note(&conn, &text)?;
+            add_memo(&conn, &text)?;
         }
         _ => {
             eprintln!("Nothing to do. Try `cap hello world` or `cap list`.");
