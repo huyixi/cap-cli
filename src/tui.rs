@@ -2,15 +2,15 @@ use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
-    Frame, Terminal,
 };
 use rusqlite::Connection;
 use std::io;
@@ -62,39 +62,42 @@ fn run_tui_loop(
 }
 
 fn draw_tui(frame: &mut Frame<'_>, state: &TuiState) {
-    let areas = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .split(frame.area());
-
-    let search_title = format!(
-        "Search{} (Tab switch, Esc/q exit)",
-        if matches!(state.focus, Focus::Search) {
-            " [active]"
-        } else {
-            ""
-        }
-    );
-    let search_border_style = if matches!(state.focus, Focus::Search) {
-        Style::default().fg(Color::Green)
+    let show_search = matches!(state.focus, Focus::Search) || !state.search.query.is_empty();
+    let areas = if show_search {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+                Constraint::Length(1),
+            ])
+            .split(frame.area())
     } else {
-        Style::default()
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(frame.area())
     };
-    let search_widget = Paragraph::new(state.search.query.as_str())
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(search_title)
-                .border_style(search_border_style),
-        )
-        .wrap(Wrap { trim: false });
-    frame.render_widget(search_widget, areas[0]);
-    if matches!(state.focus, Focus::Search) {
-        frame.set_cursor_position(state.search.cursor_position(areas[0]));
+    let (input_area, history_area, search_area) = if show_search {
+        (areas[0], areas[1], Some(areas[2]))
+    } else {
+        (areas[0], areas[1], None)
+    };
+
+    if let Some(area) = search_area {
+        let search_style = if matches!(state.focus, Focus::Search) {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+        let search_line = Line::from(format!("/{}", state.search.query));
+        let search_widget = Paragraph::new(search_line)
+            .style(search_style)
+            .wrap(Wrap { trim: false });
+        frame.render_widget(search_widget, area);
+        if matches!(state.focus, Focus::Search) {
+            frame.set_cursor_position(state.search.cursor_position_inline(area));
+        }
     }
 
     let input_lines: Vec<Line> = state
@@ -135,9 +138,9 @@ fn draw_tui(frame: &mut Frame<'_>, state: &TuiState) {
                 .border_style(input_border_style),
         )
         .wrap(Wrap { trim: false });
-    frame.render_widget(input_widget, areas[2]);
+    frame.render_widget(input_widget, input_area);
     if matches!(state.focus, Focus::Input) {
-        frame.set_cursor_position(state.input.cursor_position(areas[2]));
+        frame.set_cursor_position(state.input.cursor_position(input_area));
     }
 
     let history_items: Vec<ListItem> = state
@@ -145,14 +148,11 @@ fn draw_tui(frame: &mut Frame<'_>, state: &TuiState) {
         .iter()
         .map(|(created_at, content)| ListItem::new(format!("{}  {}", created_at, content)))
         .collect();
-    let history_title = format!(
-        "Recent Memos{} (Tab switch)",
-        if matches!(state.focus, Focus::History) {
-            " [active]"
-        } else {
-            ""
-        }
-    );
+    let history_title = if matches!(state.focus, Focus::History) {
+        "Recent Memos [active] (Tab switch, / search)".to_string()
+    } else {
+        "Recent Memos (Tab switch)".to_string()
+    };
     let history_border_style = if matches!(state.focus, Focus::History) {
         Style::default().fg(Color::Green)
     } else {
@@ -176,26 +176,27 @@ fn draw_tui(frame: &mut Frame<'_>, state: &TuiState) {
         .style(Style::default());
     let mut list_state = ListState::default();
     list_state.select(state.history_index);
-    frame.render_stateful_widget(history_widget, areas[1], &mut list_state);
+    frame.render_stateful_widget(history_widget, history_area, &mut list_state);
 }
 
 fn poll_event() -> Result<bool> {
-    Ok(event::poll(std::time::Duration::from_millis(
-        TUI_POLL_MS,
-    ))?)
+    Ok(event::poll(std::time::Duration::from_millis(TUI_POLL_MS))?)
 }
 
-fn handle_tui_key(
-    conn: &Connection,
-    state: &mut TuiState,
-    key: KeyEvent,
-) -> Result<bool> {
+fn handle_tui_key(conn: &Connection, state: &mut TuiState, key: KeyEvent) -> Result<bool> {
     match (key.code, key.modifiers) {
-        (KeyCode::Char('c'), KeyModifiers::CONTROL)
-        | (KeyCode::Char('q'), _)
-        | (KeyCode::Esc, _) => Ok(true),
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => Ok(true),
+        (KeyCode::Char('q'), _) | (KeyCode::Char('Q'), _)
+            if matches!(state.focus, Focus::History) =>
+        {
+            Ok(true)
+        }
         (KeyCode::Tab, _) => {
             state.toggle_focus();
+            Ok(false)
+        }
+        (KeyCode::Char('/'), _) if matches!(state.focus, Focus::History) => {
+            state.activate_search();
             Ok(false)
         }
         (KeyCode::Enter, modifiers)
@@ -208,7 +209,6 @@ fn handle_tui_key(
                 state.all_history = crate::fetch_recent_memos(conn, HISTORY_LIMIT)?;
                 state.apply_search();
                 state.input.clear();
-                state.input.set_status("Saved!");
             }
             Ok(false)
         }
@@ -294,8 +294,14 @@ impl TuiState {
         self.focus = match self.focus {
             Focus::Search => Focus::History,
             Focus::History => Focus::Input,
-            Focus::Input => Focus::Search,
+            Focus::Input => Focus::History,
         };
+    }
+
+    fn activate_search(&mut self) {
+        self.focus = Focus::Search;
+        self.search.clear();
+        self.apply_search();
     }
 
     fn first_history_index(&self) -> Option<usize> {
@@ -365,9 +371,13 @@ impl SearchState {
         self.query.pop();
     }
 
-    fn cursor_position(&self, area: Rect) -> (u16, u16) {
+    fn clear(&mut self) {
+        self.query.clear();
+    }
+
+    fn cursor_position_inline(&self, area: Rect) -> (u16, u16) {
         let col = self.query.chars().count() as u16;
-        (area.x + col + 1, area.y + 1)
+        (area.x + col + 1, area.y)
     }
 }
 
@@ -431,9 +441,5 @@ impl InputState {
 
     fn is_empty(&self) -> bool {
         self.lines.len() == 1 && self.lines[0].is_empty()
-    }
-
-    fn set_status(&mut self, message: &str) {
-        self.status = Some(message.to_string());
     }
 }
