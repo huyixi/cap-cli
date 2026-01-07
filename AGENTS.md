@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - `src/main.rs` contains the entire CLI implementation and command routing.
 - `Cargo.toml` and `Cargo.lock` define Rust dependencies and build settings.
-- `~/.capmind/memos.db` is the local SQLite database used by the CLI at runtime; treat it as a local artifact, not a source file.
+- `~/.capmind/capmind.db` is the local SQLite database used by the CLI at runtime; treat it as a local artifact, not a source file.
 - `target/` is Cargo build output (generated).
 
 ## Build, Test, and Development Commands
@@ -28,4 +28,4 @@
 - PRs should include a short summary, steps to verify (commands run), and example usage if CLI behavior changes.
 
 ## Security & Data Memos
-- The app writes memos to `~/.capmind/memos.db`. Avoid committing personal data; do not add this file to source control.
+- The app writes memos to `~/.capmind/capmind.db`. Avoid committing personal data; do not add this file to source control.
