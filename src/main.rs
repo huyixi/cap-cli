@@ -1,8 +1,9 @@
 use anyhow::Result;
-use chrono::Local;
+use chrono::{DateTime, Local};
 use clap::{ArgAction, Parser, Subcommand};
 use rusqlite::{Connection, params};
 use std::{env, fs, path::PathBuf};
+use uuid::Uuid;
 
 mod tui;
 
@@ -30,23 +31,45 @@ enum Command {
 }
 
 fn init_db(conn: &Connection) -> Result<()> {
-    conn.execute(
+    create_memos_table(conn)
+}
+
+fn create_memos_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS memos (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            memo_id TEXT NOT NULL UNIQUE,
             content TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )",
-        [],
+            updated_at TEXT NOT NULL,
+            deleted INTEGER NOT NULL DEFAULT 0,
+            dirty INTEGER NOT NULL DEFAULT 1,
+            server_rev INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS memos_created_at_desc_idx
+            ON memos (created_at DESC);
+        CREATE INDEX IF NOT EXISTS memos_deleted_idx
+            ON memos (deleted);
+        CREATE INDEX IF NOT EXISTS memos_dirty_idx
+            ON memos (dirty);",
     )?;
     Ok(())
 }
 
 pub(crate) fn add_memo(conn: &Connection, content: &str) -> Result<()> {
-    let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = Local::now().to_rfc3339();
+    let memo_id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO memos (content, created_at, updated_at) VALUES (?1, ?2, ?3)",
-        params![content, now, now],
+        "INSERT INTO memos (
+            memo_id,
+            content,
+            created_at,
+            updated_at,
+            deleted,
+            dirty,
+            server_rev
+        ) VALUES (?1, ?2, ?3, ?4, 0, 1, 0)",
+        params![memo_id, content, now, now],
     )?;
     Ok(())
 }
@@ -54,10 +77,21 @@ pub(crate) fn add_memo(conn: &Connection, content: &str) -> Result<()> {
 fn list_memos(conn: &Connection) -> Result<()> {
     let memos = fetch_memos(conn, None)?;
     for (created_at, content) in memos {
-        println!("{}  {}", created_at, content);
+        let display_time = format_display_time(&created_at);
+        println!("{}  {}", display_time, content);
     }
 
     Ok(())
+}
+
+pub(crate) fn format_display_time(value: &str) -> String {
+    match DateTime::parse_from_rfc3339(value) {
+        Ok(timestamp) => timestamp
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string(),
+        Err(_) => value.to_string(),
+    }
 }
 
 pub(crate) fn fetch_memos(conn: &Connection, limit: Option<usize>) -> Result<Vec<(String, String)>> {
@@ -65,6 +99,7 @@ pub(crate) fn fetch_memos(conn: &Connection, limit: Option<usize>) -> Result<Vec
     let mut stmt = conn.prepare(
         "SELECT created_at, content
          FROM memos
+         WHERE deleted = 0
          ORDER BY created_at DESC
          LIMIT ?1",
     )?;

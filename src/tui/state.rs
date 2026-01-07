@@ -1,4 +1,5 @@
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Focus {
@@ -125,7 +126,7 @@ impl SearchState {
     }
 
     pub(crate) fn cursor_position_inline(&self, area: Rect) -> (u16, u16) {
-        let col = self.query.chars().count() as u16;
+        let col = UnicodeWidthStr::width(self.query.as_str()) as u16;
         (area.x + col + 1, area.y)
     }
 }
@@ -183,7 +184,7 @@ impl InputState {
         let col = self
             .lines
             .last()
-            .map(|line| line.chars().count() as u16)
+            .map(|line| UnicodeWidthStr::width(line.as_str()) as u16)
             .unwrap_or(0);
         (area.x + col + 1, area.y + row + 1)
     }

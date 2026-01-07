@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use rusqlite::Connection;
 
 use super::state::{Focus, TuiState};
@@ -9,6 +9,9 @@ pub(crate) fn handle_tui_key(
     state: &mut TuiState,
     key: KeyEvent,
 ) -> Result<bool> {
+    if key.kind == KeyEventKind::Release {
+        return Ok(false);
+    }
     match (key.code, key.modifiers) {
         (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => Ok(true),
         (KeyCode::Char('q'), _) | (KeyCode::Char('Q'), _)
@@ -24,15 +27,15 @@ pub(crate) fn handle_tui_key(
             state.activate_search();
             Ok(false)
         }
-        (KeyCode::Enter, modifiers)
-            if modifiers.contains(KeyModifiers::SUPER)
-                || modifiers.contains(KeyModifiers::CONTROL)
-                || modifiers.contains(KeyModifiers::ALT) =>
-        {
-            if matches!(state.focus, Focus::Input) && !state.input.is_empty() {
-                crate::add_memo(conn, &state.input.text())?;
-                refresh_history(conn, state)?;
-                state.input.clear();
+        (KeyCode::Enter, modifiers) if modifiers.contains(KeyModifiers::SHIFT) => {
+            if matches!(state.focus, Focus::Input) {
+                state.input.newline();
+            }
+            Ok(false)
+        }
+        (KeyCode::Char('\n' | '\r'), modifiers) if modifiers.contains(KeyModifiers::SHIFT) => {
+            if matches!(state.focus, Focus::Input) {
+                state.input.newline();
             }
             Ok(false)
         }
@@ -53,8 +56,18 @@ pub(crate) fn handle_tui_key(
             Ok(false)
         }
         (KeyCode::Enter, _) => {
-            if matches!(state.focus, Focus::Input) {
-                state.input.newline();
+            if matches!(state.focus, Focus::Input) && !state.input.is_empty() {
+                crate::add_memo(conn, &state.input.text())?;
+                refresh_history(conn, state)?;
+                state.input.clear();
+            }
+            Ok(false)
+        }
+        (KeyCode::Char('\n' | '\r'), _) => {
+            if matches!(state.focus, Focus::Input) && !state.input.is_empty() {
+                crate::add_memo(conn, &state.input.text())?;
+                refresh_history(conn, state)?;
+                state.input.clear();
             }
             Ok(false)
         }

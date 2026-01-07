@@ -11,6 +11,8 @@ crossterm = "0.29.0"
 ratatui = "0.29.0"
 rusqlite = "0.38.0"
 structopt = "0.3.26"
+uuid = { version = "1.12.1", features = ["v4"] }
+unicode-width = "0.2.0"
 
 [[bin]]
 name = "cap"
