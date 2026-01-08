@@ -1,8 +1,10 @@
 use anyhow::Result;
 use chrono::{DateTime, Local};
 use clap::{ArgAction, Parser, Subcommand};
+use crossterm::terminal;
 use rusqlite::{Connection, params};
 use std::{env, fs, path::PathBuf};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
 mod tui;
@@ -76,9 +78,11 @@ pub(crate) fn add_memo(conn: &Connection, content: &str) -> Result<()> {
 
 fn list_memos(conn: &Connection) -> Result<()> {
     let memos = fetch_memos(conn, None)?;
+    let terminal_width = terminal::size().map(|(width, _)| width as usize).unwrap_or(80);
     for (created_at, content) in memos {
         let display_time = format_display_time(&created_at);
-        println!("{}  {}", display_time, content);
+        let line = format_memo_line(&display_time, &content, terminal_width);
+        println!("{}", line);
     }
 
     Ok(())
@@ -92,6 +96,54 @@ pub(crate) fn format_display_time(value: &str) -> String {
             .to_string(),
         Err(_) => value.to_string(),
     }
+}
+
+pub(crate) fn format_memo_line(display_time: &str, content: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let prefix = format!("{}  ", display_time);
+    let prefix_width = UnicodeWidthStr::width(prefix.as_str());
+    let clean_content = sanitize_content(content);
+    if max_width <= prefix_width {
+        return truncate_with_ellipsis(display_time, max_width);
+    }
+
+    let content_width = max_width.saturating_sub(prefix_width);
+    let truncated = truncate_with_ellipsis(&clean_content, content_width);
+    format!("{}{}", prefix, truncated)
+}
+
+fn sanitize_content(content: &str) -> String {
+    content
+        .replace(['\n', '\r', '\t'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn truncate_with_ellipsis(value: &str, max_width: usize) -> String {
+    let value_width = UnicodeWidthStr::width(value);
+    if value_width <= max_width {
+        return value.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let mut current_width = 0;
+    let mut result = String::new();
+    for ch in value.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(1);
+        if current_width + ch_width > max_width - 3 {
+            break;
+        }
+        result.push(ch);
+        current_width += ch_width;
+    }
+    result.push_str("...");
+    result
 }
 
 pub(crate) fn fetch_memos(conn: &Connection, limit: Option<usize>) -> Result<Vec<(String, String)>> {

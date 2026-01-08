@@ -180,13 +180,32 @@ impl InputState {
     }
 
     pub(crate) fn cursor_position(&self, area: Rect) -> (u16, u16) {
-        let row = self.lines.len().saturating_sub(1) as u16;
-        let col = self
+        let content_width = area.width.saturating_sub(2).max(1) as usize;
+        let mut rows_before = 0usize;
+        for line in self.lines.iter().take(self.lines.len().saturating_sub(1)) {
+            let line_width = UnicodeWidthStr::width(line.as_str());
+            let wrapped_rows = if line_width == 0 {
+                0
+            } else {
+                (line_width - 1) / content_width
+            };
+            rows_before += wrapped_rows + 1;
+        }
+
+        let last_line_width = self
             .lines
             .last()
-            .map(|line| UnicodeWidthStr::width(line.as_str()) as u16)
+            .map(|line| UnicodeWidthStr::width(line.as_str()))
             .unwrap_or(0);
-        (area.x + col + 1, area.y + row + 1)
+        let row_in_line = last_line_width / content_width;
+        let col_in_line = last_line_width % content_width;
+        let row = rows_before.saturating_add(row_in_line);
+        let col = col_in_line;
+
+        (
+            area.x + col as u16 + 1,
+            area.y + row as u16 + 1,
+        )
     }
 
     pub(crate) fn is_empty(&self) -> bool {

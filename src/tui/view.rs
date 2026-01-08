@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::format_display_time;
+use crate::{format_display_time, format_memo_line};
 use super::state::{Focus, TuiState};
 
 pub(crate) fn draw_tui(frame: &mut Frame<'_>, state: &TuiState) {
@@ -42,12 +42,14 @@ fn draw_input(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
 }
 
 fn draw_history(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
+    let available_width = area.width.saturating_sub(2) as usize;
     let history_items: Vec<ListItem> = state
         .history
         .iter()
         .map(|(created_at, content)| {
             let display_time = format_display_time(created_at);
-            ListItem::new(format!("{}  {}", display_time, content))
+            let line = format_memo_line(&display_time, content, available_width);
+            ListItem::new(line)
         })
         .collect();
     let history_widget = List::new(history_items)
