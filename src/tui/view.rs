@@ -80,29 +80,15 @@ fn draw_search(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
 }
 
 fn format_input_title(state: &TuiState) -> String {
-    let active_label = if matches!(state.focus, Focus::Input) {
-        " [active]"
-    } else {
-        ""
-    };
     match state.input.status.as_deref() {
-        Some(status) => format!(
-            "Input{} (Enter submit, Shift+Enter newline, Tab switch, Esc exit) - {}",
-            active_label, status
-        ),
-        None => format!(
-            "Input{} (Enter submit, Shift+Enter newline, Tab switch, Esc exit)",
-            active_label
-        ),
+        Some(status) => format!("Input - {}", status),
+        None => "Input".to_string(),
     }
 }
 
 fn history_title(state: &TuiState) -> String {
-    if matches!(state.focus, Focus::History) {
-        "History [active] (Tab switch, / search, q quit)".to_string()
-    } else {
-        "History (Tab switch)".to_string()
-    }
+    let _ = state;
+    "History".to_string()
 }
 
 fn focus_style(current: Focus, target: Focus) -> Style {

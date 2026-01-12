@@ -25,12 +25,12 @@ use view::draw_tui;
 const TUI_POLL_MS: u64 = 200;
 
 pub(crate) fn run_tui(conn: &Connection) -> Result<()> {
-    let (mut terminal, keyboard_enhanced) = setup_terminal()?;
+    let mut guard = TerminalGuard::new()?;
     let mut state = TuiState::new(crate::fetch_memos(conn, None)?);
 
-    let result = run_tui_loop(&mut terminal, conn, &mut state);
-    restore_terminal(&mut terminal, keyboard_enhanced)?;
-    result
+    let result = run_tui_loop(guard.terminal_mut(), conn, &mut state);
+    let restore_result = guard.restore();
+    result.and(restore_result)
 }
 
 fn setup_terminal() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, bool)> {
@@ -53,10 +53,50 @@ fn setup_terminal() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, bool)> {
     Ok((Terminal::new(backend)?, keyboard_enhanced))
 }
 
+struct TerminalGuard {
+    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    keyboard_enhanced: bool,
+    restored: bool,
+}
+
+impl TerminalGuard {
+    fn new() -> Result<Self> {
+        let (terminal, keyboard_enhanced) = setup_terminal()?;
+        Ok(Self {
+            terminal,
+            keyboard_enhanced,
+            restored: false,
+        })
+    }
+
+    fn terminal_mut(&mut self) -> &mut Terminal<CrosstermBackend<io::Stdout>> {
+        &mut self.terminal
+    }
+
+    fn restore(&mut self) -> Result<()> {
+        if self.restored {
+            return Ok(());
+        }
+        self.restored = true;
+        restore_terminal(&mut self.terminal, self.keyboard_enhanced)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        if self.restored {
+            return;
+        }
+        let _ = restore_terminal(&mut self.terminal, self.keyboard_enhanced);
+        self.restored = true;
+    }
+}
+
 fn restore_terminal(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     keyboard_enhanced: bool,
 ) -> Result<()> {
+    disable_raw_mode()?;
     if keyboard_enhanced {
         execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
     }
@@ -65,7 +105,6 @@ fn restore_terminal(
         DisableMouseCapture,
         LeaveAlternateScreen
     )?;
-    disable_raw_mode()?;
     terminal.show_cursor()?;
     Ok(())
 }

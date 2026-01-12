@@ -134,9 +134,7 @@ impl SearchState {
 pub(crate) struct InputState {
     pub(crate) lines: Vec<String>,
     pub(crate) status: Option<String>,
-    cursor_line: usize,
-    cursor_col: usize,
-    preferred_col: Option<usize>,
+    cursor: InputCursor,
 }
 
 impl InputState {
@@ -144,27 +142,24 @@ impl InputState {
         Self {
             lines: vec![String::new()],
             status: None,
-            cursor_line: 0,
-            cursor_col: 0,
-            preferred_col: None,
+            cursor: InputCursor::new(),
         }
     }
 
     pub(crate) fn insert_char(&mut self, ch: char) {
-        self.ensure_cursor_in_bounds();
-        let line = &mut self.lines[self.cursor_line];
-        let byte_index = byte_index_at_char(line, self.cursor_col);
+        self.ensure_invariants();
+        let line = &mut self.lines[self.cursor.line];
+        let byte_index = byte_index_at_char(line, self.cursor.col);
         line.insert(byte_index, ch);
-        self.cursor_col = self.cursor_col.saturating_add(1);
-        self.preferred_col = None;
-        self.status = None;
+        self.cursor.col = self.cursor.col.saturating_add(1);
+        self.reset_edit_state();
     }
 
     pub(crate) fn backspace(&mut self) {
-        self.ensure_cursor_in_bounds();
-        if self.cursor_col > 0 {
-            let line = &mut self.lines[self.cursor_line];
-            let remove_at = byte_index_at_char(line, self.cursor_col.saturating_sub(1));
+        self.ensure_invariants();
+        if self.cursor.col > 0 {
+            let line = &mut self.lines[self.cursor.line];
+            let remove_at = byte_index_at_char(line, self.cursor.col.saturating_sub(1));
             if let Some((byte_len, _)) = line[remove_at..]
                 .chars()
                 .next()
@@ -172,29 +167,27 @@ impl InputState {
             {
                 line.replace_range(remove_at..remove_at + byte_len, "");
             }
-            self.cursor_col = self.cursor_col.saturating_sub(1);
-            self.preferred_col = None;
-            self.status = None;
+            self.cursor.col = self.cursor.col.saturating_sub(1);
+            self.reset_edit_state();
             return;
         }
-        if self.cursor_line > 0 {
-            let current_line = self.lines.remove(self.cursor_line);
-            self.cursor_line = self.cursor_line.saturating_sub(1);
-            let line = &mut self.lines[self.cursor_line];
+        if self.cursor.line > 0 {
+            let current_line = self.lines.remove(self.cursor.line);
+            self.cursor.line = self.cursor.line.saturating_sub(1);
+            let line = &mut self.lines[self.cursor.line];
             let prev_len = line.chars().count();
             line.push_str(&current_line);
-            self.cursor_col = prev_len;
-            self.preferred_col = None;
-            self.status = None;
+            self.cursor.col = prev_len;
+            self.reset_edit_state();
         }
     }
 
     pub(crate) fn delete_char(&mut self) {
-        self.ensure_cursor_in_bounds();
+        self.ensure_invariants();
         let line_len = self.current_line_len();
-        if self.cursor_col < line_len {
-            let line = &mut self.lines[self.cursor_line];
-            let remove_at = byte_index_at_char(line, self.cursor_col);
+        if self.cursor.col < line_len {
+            let line = &mut self.lines[self.cursor.line];
+            let remove_at = byte_index_at_char(line, self.cursor.col);
             if let Some((byte_len, _)) = line[remove_at..]
                 .chars()
                 .next()
@@ -202,39 +195,34 @@ impl InputState {
             {
                 line.replace_range(remove_at..remove_at + byte_len, "");
             }
-            self.preferred_col = None;
-            self.status = None;
+            self.reset_edit_state();
             return;
         }
-        if self.cursor_line + 1 < self.lines.len() {
-            let next_line = self.lines.remove(self.cursor_line + 1);
-            self.lines[self.cursor_line].push_str(&next_line);
-            self.preferred_col = None;
-            self.status = None;
+        if self.cursor.line + 1 < self.lines.len() {
+            let next_line = self.lines.remove(self.cursor.line + 1);
+            self.lines[self.cursor.line].push_str(&next_line);
+            self.reset_edit_state();
         }
     }
 
     pub(crate) fn newline(&mut self) {
-        self.ensure_cursor_in_bounds();
-        let line = &mut self.lines[self.cursor_line];
-        let split_at = byte_index_at_char(line, self.cursor_col);
+        self.ensure_invariants();
+        let line = &mut self.lines[self.cursor.line];
+        let split_at = byte_index_at_char(line, self.cursor.col);
         let tail = line[split_at..].to_string();
         line.truncate(split_at);
-        let insert_at = self.cursor_line + 1;
+        let insert_at = self.cursor.line + 1;
         self.lines.insert(insert_at, tail);
-        self.cursor_line = insert_at;
-        self.cursor_col = 0;
-        self.preferred_col = None;
-        self.status = None;
+        self.cursor.line = insert_at;
+        self.cursor.col = 0;
+        self.reset_edit_state();
     }
 
     pub(crate) fn clear(&mut self) {
         self.lines.clear();
         self.lines.push(String::new());
+        self.cursor = InputCursor::new();
         self.status = None;
-        self.cursor_line = 0;
-        self.cursor_col = 0;
-        self.preferred_col = None;
     }
 
     pub(crate) fn text(&self) -> String {
@@ -243,30 +231,7 @@ impl InputState {
 
     pub(crate) fn cursor_position(&self, area: Rect) -> (u16, u16) {
         let content_width = area.width.saturating_sub(2).max(1) as usize;
-        let mut rows_before = 0usize;
-        let cursor_line = self.cursor_line.min(self.lines.len().saturating_sub(1));
-        for line in self.lines.iter().take(cursor_line) {
-            let line_width = UnicodeWidthStr::width(line.as_str());
-            let wrapped_rows = if line_width == 0 {
-                0
-            } else {
-                (line_width - 1) / content_width
-            };
-            rows_before += wrapped_rows + 1;
-        }
-
-        let line = self
-            .lines
-            .get(cursor_line)
-            .map(String::as_str)
-            .unwrap_or("");
-        let cursor_col = self.cursor_col.min(line.chars().count());
-        let prefix_width = width_up_to_char(line, cursor_col);
-        let row_in_line = prefix_width / content_width;
-        let col_in_line = prefix_width % content_width;
-        let row = rows_before.saturating_add(row_in_line);
-        let col = col_in_line;
-
+        let (row, col) = wrapped_cursor_position(&self.lines, &self.cursor, content_width);
         (area.x + col as u16 + 1, area.y + row as u16 + 1)
     }
 
@@ -275,68 +240,89 @@ impl InputState {
     }
 
     pub(crate) fn move_left(&mut self) {
-        self.ensure_cursor_in_bounds();
-        if self.cursor_col > 0 {
-            self.cursor_col = self.cursor_col.saturating_sub(1);
-        } else if self.cursor_line > 0 {
-            self.cursor_line = self.cursor_line.saturating_sub(1);
-            self.cursor_col = self.current_line_len();
+        self.ensure_invariants();
+        if self.cursor.col > 0 {
+            self.cursor.col = self.cursor.col.saturating_sub(1);
+        } else if self.cursor.line > 0 {
+            self.cursor.line = self.cursor.line.saturating_sub(1);
+            self.cursor.col = self.current_line_len();
         }
-        self.preferred_col = None;
+        self.cursor.preferred_col = None;
     }
 
     pub(crate) fn move_right(&mut self) {
-        self.ensure_cursor_in_bounds();
+        self.ensure_invariants();
         let line_len = self.current_line_len();
-        if self.cursor_col < line_len {
-            self.cursor_col = self.cursor_col.saturating_add(1);
-        } else if self.cursor_line + 1 < self.lines.len() {
-            self.cursor_line = self.cursor_line.saturating_add(1);
-            self.cursor_col = 0;
+        if self.cursor.col < line_len {
+            self.cursor.col = self.cursor.col.saturating_add(1);
+        } else if self.cursor.line + 1 < self.lines.len() {
+            self.cursor.line = self.cursor.line.saturating_add(1);
+            self.cursor.col = 0;
         }
-        self.preferred_col = None;
+        self.cursor.preferred_col = None;
     }
 
     pub(crate) fn move_up(&mut self) {
-        self.ensure_cursor_in_bounds();
-        if self.cursor_line == 0 {
+        self.ensure_invariants();
+        if self.cursor.line == 0 {
             return;
         }
-        let target_col = self.preferred_col.unwrap_or(self.cursor_col);
-        self.cursor_line = self.cursor_line.saturating_sub(1);
-        self.cursor_col = target_col.min(self.current_line_len());
-        self.preferred_col = Some(target_col);
+        let target_col = self.cursor.preferred_col.unwrap_or(self.cursor.col);
+        self.cursor.line = self.cursor.line.saturating_sub(1);
+        self.cursor.col = target_col.min(self.current_line_len());
+        self.cursor.preferred_col = Some(target_col);
     }
 
     pub(crate) fn move_down(&mut self) {
-        self.ensure_cursor_in_bounds();
-        if self.cursor_line + 1 >= self.lines.len() {
+        self.ensure_invariants();
+        if self.cursor.line + 1 >= self.lines.len() {
             return;
         }
-        let target_col = self.preferred_col.unwrap_or(self.cursor_col);
-        self.cursor_line = self.cursor_line.saturating_add(1);
-        self.cursor_col = target_col.min(self.current_line_len());
-        self.preferred_col = Some(target_col);
+        let target_col = self.cursor.preferred_col.unwrap_or(self.cursor.col);
+        self.cursor.line = self.cursor.line.saturating_add(1);
+        self.cursor.col = target_col.min(self.current_line_len());
+        self.cursor.preferred_col = Some(target_col);
     }
 
-    fn ensure_cursor_in_bounds(&mut self) {
+    fn ensure_invariants(&mut self) {
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
-        if self.cursor_line >= self.lines.len() {
-            self.cursor_line = self.lines.len().saturating_sub(1);
+        if self.cursor.line >= self.lines.len() {
+            self.cursor.line = self.lines.len().saturating_sub(1);
         }
         let line_len = self.current_line_len();
-        if self.cursor_col > line_len {
-            self.cursor_col = line_len;
+        if self.cursor.col > line_len {
+            self.cursor.col = line_len;
         }
     }
 
     fn current_line_len(&self) -> usize {
         self.lines
-            .get(self.cursor_line)
+            .get(self.cursor.line)
             .map(|line| line.chars().count())
             .unwrap_or(0)
+    }
+
+    fn reset_edit_state(&mut self) {
+        self.cursor.preferred_col = None;
+        self.status = None;
+    }
+}
+
+struct InputCursor {
+    line: usize,
+    col: usize,
+    preferred_col: Option<usize>,
+}
+
+impl InputCursor {
+    fn new() -> Self {
+        Self {
+            line: 0,
+            col: 0,
+            preferred_col: None,
+        }
     }
 }
 
@@ -357,4 +343,35 @@ fn width_up_to_char(value: &str, char_index: usize) -> usize {
         .take(char_index)
         .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
         .sum()
+}
+
+fn wrapped_cursor_position(
+    lines: &[String],
+    cursor: &InputCursor,
+    content_width: usize,
+) -> (usize, usize) {
+    let mut rows_before = 0usize;
+    let cursor_line = cursor.line.min(lines.len().saturating_sub(1));
+    for line in lines.iter().take(cursor_line) {
+        let line_width = UnicodeWidthStr::width(line.as_str());
+        let wrapped_rows = if line_width == 0 {
+            0
+        } else {
+            (line_width - 1) / content_width
+        };
+        rows_before += wrapped_rows + 1;
+    }
+
+    let line = lines
+        .get(cursor_line)
+        .map(String::as_str)
+        .unwrap_or("");
+    let cursor_col = cursor.col.min(line.chars().count());
+    let prefix_width = width_up_to_char(line, cursor_col);
+    let row_in_line = prefix_width / content_width;
+    let col_in_line = prefix_width % content_width;
+    let row = rows_before.saturating_add(row_in_line);
+    let col = col_in_line;
+
+    (row, col)
 }
