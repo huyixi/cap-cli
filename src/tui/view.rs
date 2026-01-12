@@ -87,11 +87,11 @@ fn format_input_title(state: &TuiState) -> String {
     };
     match state.input.status.as_deref() {
         Some(status) => format!(
-            "Memo Input{} (Enter submit, Shift+Enter newline, Tab switch, Esc exit) - {}",
+            "Input{} (Enter submit, Shift+Enter newline, Tab switch, Esc exit) - {}",
             active_label, status
         ),
         None => format!(
-            "Memo Input{} (Enter submit, Shift+Enter newline, Tab switch, Esc exit)",
+            "Input{} (Enter submit, Shift+Enter newline, Tab switch, Esc exit)",
             active_label
         ),
     }
@@ -99,9 +99,9 @@ fn format_input_title(state: &TuiState) -> String {
 
 fn history_title(state: &TuiState) -> String {
     if matches!(state.focus, Focus::History) {
-        "Recent Memos [active] (Tab switch, / search, q quit)".to_string()
+        "History [active] (Tab switch, / search, q quit)".to_string()
     } else {
-        "Recent Memos (Tab switch)".to_string()
+        "History (Tab switch)".to_string()
     }
 }
 
