@@ -6,8 +6,8 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::{format_display_time, format_memo_line};
 use super::state::{Focus, TuiState};
+use crate::{format_display_time, format_memo_line};
 
 pub(crate) fn draw_tui(frame: &mut Frame<'_>, state: &TuiState) {
     let layout = split_layout(frame.area(), state.is_search_visible());

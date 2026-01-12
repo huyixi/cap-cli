@@ -2,12 +2,17 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use clap::{ArgAction, Parser, Subcommand};
 use crossterm::terminal;
+use reqwest::blocking::Client;
 use rusqlite::{Connection, params};
+use serde::Deserialize;
 use std::{env, fs, path::PathBuf};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
 mod tui;
+
+const DEFAULT_SUPABASE_URL: &str = "https://your-project.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY: &str = "your_anon_key";
 
 #[derive(Parser)]
 #[command(name = "cap")]
@@ -27,13 +32,20 @@ enum Command {
     Add {
         content: String,
     },
+    Login {
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        password: String,
+    },
     Version,
     #[command(alias = "ls")]
     List,
 }
 
 fn init_db(conn: &Connection) -> Result<()> {
-    create_memos_table(conn)
+    create_memos_table(conn)?;
+    create_kv_table(conn)
 }
 
 fn create_memos_table(conn: &Connection) -> Result<()> {
@@ -58,6 +70,16 @@ fn create_memos_table(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn create_kv_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS kv (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    )?;
+    Ok(())
+}
+
 pub(crate) fn add_memo(conn: &Connection, content: &str) -> Result<()> {
     let now = Local::now().to_rfc3339();
     let memo_id = Uuid::new_v4().to_string();
@@ -78,7 +100,9 @@ pub(crate) fn add_memo(conn: &Connection, content: &str) -> Result<()> {
 
 fn list_memos(conn: &Connection) -> Result<()> {
     let memos = fetch_memos(conn, None)?;
-    let terminal_width = terminal::size().map(|(width, _)| width as usize).unwrap_or(80);
+    let terminal_width = terminal::size()
+        .map(|(width, _)| width as usize)
+        .unwrap_or(80);
     for (created_at, content) in memos {
         let display_time = format_display_time(&created_at);
         let line = format_memo_line(&display_time, &content, terminal_width);
@@ -96,6 +120,80 @@ pub(crate) fn format_display_time(value: &str) -> String {
             .to_string(),
         Err(_) => value.to_string(),
     }
+}
+
+fn login(conn: &Connection, email: &str, password: &str) -> Result<()> {
+    let supabase_url =
+        env::var("SUPABASE_URL").unwrap_or_else(|_| DEFAULT_SUPABASE_URL.to_string());
+    let supabase_anon_key =
+        env::var("SUPABASE_ANON_KEY").unwrap_or_else(|_| DEFAULT_SUPABASE_ANON_KEY.to_string());
+    let url = format!(
+        "{}/auth/v1/token?grant_type=password",
+        supabase_url.trim_end_matches('/')
+    );
+
+    let client = Client::new();
+    let response = client
+        .post(url)
+        .header("apikey", supabase_anon_key)
+        .json(&LoginRequest { email, password })
+        .send()?
+        .error_for_status()?;
+
+    let login_response: LoginResponse = response.json()?;
+    set_kv(conn, "auth_access_token", &login_response.access_token)?;
+    set_kv(conn, "auth_refresh_token", &login_response.refresh_token)?;
+    set_kv(
+        conn,
+        "auth_expires_in",
+        &login_response.expires_in.to_string(),
+    )?;
+    set_kv(conn, "auth_user_id", &login_response.user.id)?;
+    println!("Logged in as {}", login_response.user.id);
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct LoginResponse {
+    access_token: String,
+    refresh_token: String,
+    expires_in: i64,
+    user: LoginUser,
+}
+
+#[derive(Deserialize)]
+struct LoginUser {
+    id: String,
+}
+
+#[derive(serde::Serialize)]
+struct LoginRequest<'a> {
+    email: &'a str,
+    password: &'a str,
+}
+
+fn set_kv(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO kv (key, value)
+         VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn get_kv(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM kv WHERE key = ?1")?;
+    let mut rows = stmt.query(params![key])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(row.get(0)?))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) fn get_auth_token(conn: &Connection) -> Result<Option<String>> {
+    get_kv(conn, "auth_access_token")
 }
 
 pub(crate) fn format_memo_line(display_time: &str, content: &str, max_width: usize) -> String {
@@ -146,7 +244,10 @@ fn truncate_with_ellipsis(value: &str, max_width: usize) -> String {
     result
 }
 
-pub(crate) fn fetch_memos(conn: &Connection, limit: Option<usize>) -> Result<Vec<(String, String)>> {
+pub(crate) fn fetch_memos(
+    conn: &Connection,
+    limit: Option<usize>,
+) -> Result<Vec<(String, String)>> {
     let limit_value = limit.map(|value| value as i64).unwrap_or(-1);
     let mut stmt = conn.prepare(
         "SELECT created_at, content
@@ -181,6 +282,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::List) => list_memos(&conn)?,
+        Some(Command::Login { email, password }) => login(&conn, &email, &password)?,
         Some(Command::Version) => {
             println!("cap {}", env!("CARGO_PKG_VERSION"));
         }

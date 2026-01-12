@@ -43,8 +43,24 @@ pub(crate) fn handle_tui_key(
             state.move_history_selection_up();
             Ok(false)
         }
+        (KeyCode::Up, _) if matches!(state.focus, Focus::Input) => {
+            state.input.move_up();
+            Ok(false)
+        }
         (KeyCode::Down, _) if matches!(state.focus, Focus::History) => {
             state.move_history_selection_down();
+            Ok(false)
+        }
+        (KeyCode::Down, _) if matches!(state.focus, Focus::Input) => {
+            state.input.move_down();
+            Ok(false)
+        }
+        (KeyCode::Left, _) if matches!(state.focus, Focus::Input) => {
+            state.input.move_left();
+            Ok(false)
+        }
+        (KeyCode::Right, _) if matches!(state.focus, Focus::Input) => {
+            state.input.move_right();
             Ok(false)
         }
         (KeyCode::Char('k'), _) if matches!(state.focus, Focus::History) => {
@@ -80,6 +96,10 @@ pub(crate) fn handle_tui_key(
                 }
                 Focus::History => {}
             }
+            Ok(false)
+        }
+        (KeyCode::Delete, _) if matches!(state.focus, Focus::Input) => {
+            state.input.delete_char();
             Ok(false)
         }
         (KeyCode::Char(ch), _) => {

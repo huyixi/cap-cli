@@ -1,5 +1,5 @@
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Focus {
@@ -134,6 +134,9 @@ impl SearchState {
 pub(crate) struct InputState {
     pub(crate) lines: Vec<String>,
     pub(crate) status: Option<String>,
+    cursor_line: usize,
+    cursor_col: usize,
+    preferred_col: Option<usize>,
 }
 
 impl InputState {
@@ -141,31 +144,87 @@ impl InputState {
         Self {
             lines: vec![String::new()],
             status: None,
+            cursor_line: 0,
+            cursor_col: 0,
+            preferred_col: None,
         }
     }
 
     pub(crate) fn insert_char(&mut self, ch: char) {
-        if let Some(line) = self.lines.last_mut() {
-            line.push(ch);
-        }
+        self.ensure_cursor_in_bounds();
+        let line = &mut self.lines[self.cursor_line];
+        let byte_index = byte_index_at_char(line, self.cursor_col);
+        line.insert(byte_index, ch);
+        self.cursor_col = self.cursor_col.saturating_add(1);
+        self.preferred_col = None;
         self.status = None;
     }
 
     pub(crate) fn backspace(&mut self) {
-        if let Some(line) = self.lines.last_mut() {
-            if line.pop().is_some() {
-                self.status = None;
-                return;
+        self.ensure_cursor_in_bounds();
+        if self.cursor_col > 0 {
+            let line = &mut self.lines[self.cursor_line];
+            let remove_at = byte_index_at_char(line, self.cursor_col.saturating_sub(1));
+            if let Some((byte_len, _)) = line[remove_at..]
+                .chars()
+                .next()
+                .map(|ch| (ch.len_utf8(), ch))
+            {
+                line.replace_range(remove_at..remove_at + byte_len, "");
             }
+            self.cursor_col = self.cursor_col.saturating_sub(1);
+            self.preferred_col = None;
+            self.status = None;
+            return;
         }
-        if self.lines.len() > 1 {
-            self.lines.pop();
+        if self.cursor_line > 0 {
+            let current_line = self.lines.remove(self.cursor_line);
+            self.cursor_line = self.cursor_line.saturating_sub(1);
+            let line = &mut self.lines[self.cursor_line];
+            let prev_len = line.chars().count();
+            line.push_str(&current_line);
+            self.cursor_col = prev_len;
+            self.preferred_col = None;
+            self.status = None;
+        }
+    }
+
+    pub(crate) fn delete_char(&mut self) {
+        self.ensure_cursor_in_bounds();
+        let line_len = self.current_line_len();
+        if self.cursor_col < line_len {
+            let line = &mut self.lines[self.cursor_line];
+            let remove_at = byte_index_at_char(line, self.cursor_col);
+            if let Some((byte_len, _)) = line[remove_at..]
+                .chars()
+                .next()
+                .map(|ch| (ch.len_utf8(), ch))
+            {
+                line.replace_range(remove_at..remove_at + byte_len, "");
+            }
+            self.preferred_col = None;
+            self.status = None;
+            return;
+        }
+        if self.cursor_line + 1 < self.lines.len() {
+            let next_line = self.lines.remove(self.cursor_line + 1);
+            self.lines[self.cursor_line].push_str(&next_line);
+            self.preferred_col = None;
             self.status = None;
         }
     }
 
     pub(crate) fn newline(&mut self) {
-        self.lines.push(String::new());
+        self.ensure_cursor_in_bounds();
+        let line = &mut self.lines[self.cursor_line];
+        let split_at = byte_index_at_char(line, self.cursor_col);
+        let tail = line[split_at..].to_string();
+        line.truncate(split_at);
+        let insert_at = self.cursor_line + 1;
+        self.lines.insert(insert_at, tail);
+        self.cursor_line = insert_at;
+        self.cursor_col = 0;
+        self.preferred_col = None;
         self.status = None;
     }
 
@@ -173,6 +232,9 @@ impl InputState {
         self.lines.clear();
         self.lines.push(String::new());
         self.status = None;
+        self.cursor_line = 0;
+        self.cursor_col = 0;
+        self.preferred_col = None;
     }
 
     pub(crate) fn text(&self) -> String {
@@ -182,7 +244,8 @@ impl InputState {
     pub(crate) fn cursor_position(&self, area: Rect) -> (u16, u16) {
         let content_width = area.width.saturating_sub(2).max(1) as usize;
         let mut rows_before = 0usize;
-        for line in self.lines.iter().take(self.lines.len().saturating_sub(1)) {
+        let cursor_line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        for line in self.lines.iter().take(cursor_line) {
             let line_width = UnicodeWidthStr::width(line.as_str());
             let wrapped_rows = if line_width == 0 {
                 0
@@ -192,23 +255,106 @@ impl InputState {
             rows_before += wrapped_rows + 1;
         }
 
-        let last_line_width = self
+        let line = self
             .lines
-            .last()
-            .map(|line| UnicodeWidthStr::width(line.as_str()))
-            .unwrap_or(0);
-        let row_in_line = last_line_width / content_width;
-        let col_in_line = last_line_width % content_width;
+            .get(cursor_line)
+            .map(String::as_str)
+            .unwrap_or("");
+        let cursor_col = self.cursor_col.min(line.chars().count());
+        let prefix_width = width_up_to_char(line, cursor_col);
+        let row_in_line = prefix_width / content_width;
+        let col_in_line = prefix_width % content_width;
         let row = rows_before.saturating_add(row_in_line);
         let col = col_in_line;
 
-        (
-            area.x + col as u16 + 1,
-            area.y + row as u16 + 1,
-        )
+        (area.x + col as u16 + 1, area.y + row as u16 + 1)
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.lines.len() == 1 && self.lines[0].is_empty()
     }
+
+    pub(crate) fn move_left(&mut self) {
+        self.ensure_cursor_in_bounds();
+        if self.cursor_col > 0 {
+            self.cursor_col = self.cursor_col.saturating_sub(1);
+        } else if self.cursor_line > 0 {
+            self.cursor_line = self.cursor_line.saturating_sub(1);
+            self.cursor_col = self.current_line_len();
+        }
+        self.preferred_col = None;
+    }
+
+    pub(crate) fn move_right(&mut self) {
+        self.ensure_cursor_in_bounds();
+        let line_len = self.current_line_len();
+        if self.cursor_col < line_len {
+            self.cursor_col = self.cursor_col.saturating_add(1);
+        } else if self.cursor_line + 1 < self.lines.len() {
+            self.cursor_line = self.cursor_line.saturating_add(1);
+            self.cursor_col = 0;
+        }
+        self.preferred_col = None;
+    }
+
+    pub(crate) fn move_up(&mut self) {
+        self.ensure_cursor_in_bounds();
+        if self.cursor_line == 0 {
+            return;
+        }
+        let target_col = self.preferred_col.unwrap_or(self.cursor_col);
+        self.cursor_line = self.cursor_line.saturating_sub(1);
+        self.cursor_col = target_col.min(self.current_line_len());
+        self.preferred_col = Some(target_col);
+    }
+
+    pub(crate) fn move_down(&mut self) {
+        self.ensure_cursor_in_bounds();
+        if self.cursor_line + 1 >= self.lines.len() {
+            return;
+        }
+        let target_col = self.preferred_col.unwrap_or(self.cursor_col);
+        self.cursor_line = self.cursor_line.saturating_add(1);
+        self.cursor_col = target_col.min(self.current_line_len());
+        self.preferred_col = Some(target_col);
+    }
+
+    fn ensure_cursor_in_bounds(&mut self) {
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        if self.cursor_line >= self.lines.len() {
+            self.cursor_line = self.lines.len().saturating_sub(1);
+        }
+        let line_len = self.current_line_len();
+        if self.cursor_col > line_len {
+            self.cursor_col = line_len;
+        }
+    }
+
+    fn current_line_len(&self) -> usize {
+        self.lines
+            .get(self.cursor_line)
+            .map(|line| line.chars().count())
+            .unwrap_or(0)
+    }
+}
+
+fn byte_index_at_char(value: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+    value
+        .char_indices()
+        .nth(char_index)
+        .map(|(idx, _)| idx)
+        .unwrap_or_else(|| value.len())
+}
+
+fn width_up_to_char(value: &str, char_index: usize) -> usize {
+    value
+        .chars()
+        .take(char_index)
+        .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum()
 }
