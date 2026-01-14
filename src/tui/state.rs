@@ -1,6 +1,8 @@
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::domain::memo::Memo;
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Focus {
     Search,
@@ -11,14 +13,14 @@ pub(crate) enum Focus {
 pub(crate) struct TuiState {
     pub(crate) search: SearchState,
     pub(crate) input: InputState,
-    pub(crate) history: Vec<(String, String)>,
-    all_history: Vec<(String, String)>,
+    pub(crate) history: Vec<Memo>,
+    all_history: Vec<Memo>,
     pub(crate) focus: Focus,
     pub(crate) history_index: Option<usize>,
 }
 
 impl TuiState {
-    pub(crate) fn new(history: Vec<(String, String)>) -> Self {
+    pub(crate) fn new(history: Vec<Memo>) -> Self {
         let mut state = Self {
             search: SearchState::new(),
             input: InputState::new(),
@@ -45,7 +47,7 @@ impl TuiState {
         self.apply_search();
     }
 
-    pub(crate) fn set_history(&mut self, history: Vec<(String, String)>) {
+    pub(crate) fn set_history(&mut self, history: Vec<Memo>) {
         self.all_history = history;
         self.apply_search();
     }
@@ -58,9 +60,9 @@ impl TuiState {
             self.history = self
                 .all_history
                 .iter()
-                .filter(|(created_at, content)| {
-                    content.to_lowercase().contains(&needle)
-                        || created_at.to_lowercase().contains(&needle)
+                .filter(|memo| {
+                    memo.content.to_lowercase().contains(&needle)
+                        || memo.created_at.to_lowercase().contains(&needle)
                 })
                 .cloned()
                 .collect();
@@ -362,10 +364,7 @@ fn wrapped_cursor_position(
         rows_before += wrapped_rows + 1;
     }
 
-    let line = lines
-        .get(cursor_line)
-        .map(String::as_str)
-        .unwrap_or("");
+    let line = lines.get(cursor_line).map(String::as_str).unwrap_or("");
     let cursor_col = cursor.col.min(line.chars().count());
     let prefix_width = width_up_to_char(line, cursor_col);
     let row_in_line = prefix_width / content_width;

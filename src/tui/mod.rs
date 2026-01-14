@@ -11,24 +11,25 @@ use crossterm::{
     },
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
-use rusqlite::Connection;
 use std::io;
 
 mod handler;
 mod state;
 mod view;
 
+use crate::db::Db;
 use handler::handle_tui_key;
 use state::TuiState;
 use view::draw_tui;
 
 const TUI_POLL_MS: u64 = 200;
 
-pub(crate) fn run_tui(conn: &Connection) -> Result<()> {
+pub(crate) fn run_tui(db: &Db) -> Result<()> {
     let mut guard = TerminalGuard::new()?;
-    let mut state = TuiState::new(crate::fetch_memos(conn, None)?);
+    let mut state = TuiState::new(crate::db::fetch_memos(db, None)?);
 
-    let result = run_tui_loop(guard.terminal_mut(), conn, &mut state);
+    let result = run_tui_loop(guard.terminal_mut(), db, &mut state);
+    let _ = drain_pending_events();
     let restore_result = guard.restore();
     result.and(restore_result)
 }
@@ -96,22 +97,40 @@ fn restore_terminal(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     keyboard_enhanced: bool,
 ) -> Result<()> {
-    disable_raw_mode()?;
-    if keyboard_enhanced {
-        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+    let mut first_error: Option<anyhow::Error> = None;
+    if let Err(err) = disable_raw_mode() {
+        first_error = Some(err.into());
     }
-    execute!(
+    if keyboard_enhanced {
+        if let Err(err) = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags) {
+            if first_error.is_none() {
+                first_error = Some(err.into());
+            }
+        }
+    }
+    if let Err(err) = execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
         LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
+    ) {
+        if first_error.is_none() {
+            first_error = Some(err.into());
+        }
+    }
+    if let Err(err) = terminal.show_cursor() {
+        if first_error.is_none() {
+            first_error = Some(err.into());
+        }
+    }
+    if let Some(err) = first_error {
+        return Err(err);
+    }
     Ok(())
 }
 
 fn run_tui_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    conn: &Connection,
+    db: &Db,
     state: &mut TuiState,
 ) -> Result<()> {
     loop {
@@ -121,7 +140,7 @@ fn run_tui_loop(
         }
         match event::read()? {
             Event::Key(key) => {
-                if handle_tui_key(conn, state, key)? {
+                if handle_tui_key(db, state, key)? {
                     break;
                 }
             }
@@ -134,4 +153,11 @@ fn run_tui_loop(
 
 fn poll_event() -> Result<bool> {
     Ok(event::poll(std::time::Duration::from_millis(TUI_POLL_MS))?)
+}
+
+fn drain_pending_events() -> Result<()> {
+    while event::poll(std::time::Duration::from_millis(0))? {
+        let _ = event::read();
+    }
+    Ok(())
 }

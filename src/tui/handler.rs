@@ -1,14 +1,13 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use rusqlite::Connection;
 
 use super::state::{Focus, TuiState};
+use crate::{
+    db::{self, Db},
+    domain::memo::NewMemo,
+};
 
-pub(crate) fn handle_tui_key(
-    conn: &Connection,
-    state: &mut TuiState,
-    key: KeyEvent,
-) -> Result<bool> {
+pub(crate) fn handle_tui_key(db: &Db, state: &mut TuiState, key: KeyEvent) -> Result<bool> {
     if key.kind == KeyEventKind::Release {
         return Ok(false);
     }
@@ -27,11 +26,23 @@ pub(crate) fn handle_tui_key(
             state.activate_search();
             Ok(false)
         }
-        (KeyCode::Enter, modifiers) if modifiers.contains(KeyModifiers::SHIFT) => {
+        (KeyCode::Enter, modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+            submit_input_if_ready(db, state)?;
+            Ok(false)
+        }
+        (KeyCode::Char('\n' | '\r'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+            submit_input_if_ready(db, state)?;
+            Ok(false)
+        }
+        (KeyCode::Char('m' | 'j'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+            submit_input_if_ready(db, state)?;
+            Ok(false)
+        }
+        (KeyCode::Enter, _) => {
             insert_newline_if_input_focus(state);
             Ok(false)
         }
-        (KeyCode::Char('\n' | '\r'), modifiers) if modifiers.contains(KeyModifiers::SHIFT) => {
+        (KeyCode::Char('\n' | '\r'), _) => {
             insert_newline_if_input_focus(state);
             Ok(false)
         }
@@ -67,14 +78,6 @@ pub(crate) fn handle_tui_key(
             state.move_history_selection_down();
             Ok(false)
         }
-        (KeyCode::Enter, _) => {
-            submit_input_if_ready(conn, state)?;
-            Ok(false)
-        }
-        (KeyCode::Char('\n' | '\r'), _) => {
-            submit_input_if_ready(conn, state)?;
-            Ok(false)
-        }
         (KeyCode::Backspace, _) => {
             match state.focus {
                 Focus::Input => state.input.backspace(),
@@ -105,8 +108,8 @@ pub(crate) fn handle_tui_key(
     }
 }
 
-fn refresh_history(conn: &Connection, state: &mut TuiState) -> Result<()> {
-    let history = crate::fetch_memos(conn, None)?;
+fn refresh_history(db: &Db, state: &mut TuiState) -> Result<()> {
+    let history = db::fetch_memos(db, None)?;
     state.set_history(history);
     Ok(())
 }
@@ -117,11 +120,16 @@ fn insert_newline_if_input_focus(state: &mut TuiState) {
     }
 }
 
-fn submit_input_if_ready(conn: &Connection, state: &mut TuiState) -> Result<()> {
-    if matches!(state.focus, Focus::Input) && !state.input.is_empty() {
-        crate::add_memo(conn, &state.input.text())?;
-        refresh_history(conn, state)?;
-        state.input.clear();
+fn submit_input_if_ready(db: &Db, state: &mut TuiState) -> Result<()> {
+    if !matches!(state.focus, Focus::Input) {
+        return Ok(());
     }
+    if state.input.is_empty() {
+        return Ok(());
+    }
+    let new_memo = NewMemo::new(state.input.text());
+    db::add_memo(db, &new_memo)?;
+    refresh_history(db, state)?;
+    state.input.clear();
     Ok(())
 }

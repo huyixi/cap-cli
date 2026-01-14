@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use super::state::{Focus, TuiState};
-use crate::{format_display_time, format_memo_line};
+use crate::format;
 
 pub(crate) fn draw_tui(frame: &mut Frame<'_>, state: &TuiState) {
     let layout = split_layout(frame.area(), state.is_search_visible());
@@ -46,9 +46,9 @@ fn draw_history(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
     let history_items: Vec<ListItem> = state
         .history
         .iter()
-        .map(|(created_at, content)| {
-            let display_time = format_display_time(created_at);
-            let line = format_memo_line(&display_time, content, available_width);
+        .map(|memo| {
+            let display_time = format::format_display_time(&memo.created_at);
+            let line = format::format_memo_line(&display_time, &memo.content, available_width);
             ListItem::new(line)
         })
         .collect();
