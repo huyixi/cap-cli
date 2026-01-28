@@ -7,78 +7,128 @@ use crate::{
     domain::memo::NewMemo,
 };
 
+#[derive(Clone, Copy, Debug)]
+enum Action {
+    Quit,
+    ToggleFocus,
+    ActivateSearch,
+    SubmitInput,
+    InsertNewline,
+    MoveUp,
+    MoveDown,
+    MoveLeft,
+    MoveRight,
+    Backspace,
+    Delete,
+    InsertChar(char),
+}
+
 pub(crate) fn handle_tui_key(db: &Db, state: &mut TuiState, key: KeyEvent) -> Result<bool> {
     if key.kind == KeyEventKind::Release {
         return Ok(false);
     }
-    match (key.code, key.modifiers) {
-        (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => Ok(true),
-        (KeyCode::Char('q'), _) | (KeyCode::Char('Q'), _)
-            if matches!(state.focus, Focus::History) =>
-        {
-            Ok(true)
-        }
-        (KeyCode::Tab, _) => {
+    match key_to_action(&key, state.focus) {
+        Some(action) => apply_action(db, state, action),
+        None => Ok(false),
+    }
+}
+
+fn key_to_action(key: &KeyEvent, focus: Focus) -> Option<Action> {
+    let code = key.code;
+    let modifiers = key.modifiers;
+
+    if matches!(
+        (code, modifiers),
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Esc, _)
+    ) {
+        return Some(Action::Quit);
+    }
+
+    if matches!(focus, Focus::History) && matches!(code, KeyCode::Char('q') | KeyCode::Char('Q')) {
+        return Some(Action::Quit);
+    }
+
+    if matches!(code, KeyCode::Tab) {
+        return Some(Action::ToggleFocus);
+    }
+
+    if matches!(focus, Focus::History) && matches!(code, KeyCode::Char('/')) {
+        return Some(Action::ActivateSearch);
+    }
+
+    if is_submit_key(code, modifiers) {
+        return Some(Action::SubmitInput);
+    }
+
+    if is_newline_key(code) {
+        return Some(Action::InsertNewline);
+    }
+
+    match code {
+        KeyCode::Up => Some(Action::MoveUp),
+        KeyCode::Down => Some(Action::MoveDown),
+        KeyCode::Left => Some(Action::MoveLeft),
+        KeyCode::Right => Some(Action::MoveRight),
+        KeyCode::Char('k') if matches!(focus, Focus::History) => Some(Action::MoveUp),
+        KeyCode::Char('j') if matches!(focus, Focus::History) => Some(Action::MoveDown),
+        KeyCode::Backspace => Some(Action::Backspace),
+        KeyCode::Delete if matches!(focus, Focus::Input) => Some(Action::Delete),
+        KeyCode::Char(ch) => match focus {
+            Focus::History => None,
+            Focus::Input | Focus::Search => Some(Action::InsertChar(ch)),
+        },
+        _ => None,
+    }
+}
+
+fn apply_action(db: &Db, state: &mut TuiState, action: Action) -> Result<bool> {
+    match action {
+        Action::Quit => Ok(true),
+        Action::ToggleFocus => {
             state.toggle_focus();
             Ok(false)
         }
-        (KeyCode::Char('/'), _) if matches!(state.focus, Focus::History) => {
+        Action::ActivateSearch => {
             state.activate_search();
             Ok(false)
         }
-        (KeyCode::Enter, modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+        Action::SubmitInput => {
             submit_input_if_ready(db, state)?;
             Ok(false)
         }
-        (KeyCode::Char('\n' | '\r'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
-            submit_input_if_ready(db, state)?;
-            Ok(false)
-        }
-        (KeyCode::Char('m' | 'j'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
-            submit_input_if_ready(db, state)?;
-            Ok(false)
-        }
-        (KeyCode::Enter, _) => {
+        Action::InsertNewline => {
             insert_newline_if_input_focus(state);
             Ok(false)
         }
-        (KeyCode::Char('\n' | '\r'), _) => {
-            insert_newline_if_input_focus(state);
+        Action::MoveUp => {
+            match state.focus {
+                Focus::History => state.move_history_selection_up(),
+                Focus::Input => state.input.move_up(),
+                Focus::Search => {}
+            }
             Ok(false)
         }
-        (KeyCode::Up, _) if matches!(state.focus, Focus::History) => {
-            state.move_history_selection_up();
+        Action::MoveDown => {
+            match state.focus {
+                Focus::History => state.move_history_selection_down(),
+                Focus::Input => state.input.move_down(),
+                Focus::Search => {}
+            }
             Ok(false)
         }
-        (KeyCode::Up, _) if matches!(state.focus, Focus::Input) => {
-            state.input.move_up();
+        Action::MoveLeft => {
+            if matches!(state.focus, Focus::Input) {
+                state.input.move_left();
+            }
             Ok(false)
         }
-        (KeyCode::Down, _) if matches!(state.focus, Focus::History) => {
-            state.move_history_selection_down();
+        Action::MoveRight => {
+            if matches!(state.focus, Focus::Input) {
+                state.input.move_right();
+            }
             Ok(false)
         }
-        (KeyCode::Down, _) if matches!(state.focus, Focus::Input) => {
-            state.input.move_down();
-            Ok(false)
-        }
-        (KeyCode::Left, _) if matches!(state.focus, Focus::Input) => {
-            state.input.move_left();
-            Ok(false)
-        }
-        (KeyCode::Right, _) if matches!(state.focus, Focus::Input) => {
-            state.input.move_right();
-            Ok(false)
-        }
-        (KeyCode::Char('k'), _) if matches!(state.focus, Focus::History) => {
-            state.move_history_selection_up();
-            Ok(false)
-        }
-        (KeyCode::Char('j'), _) if matches!(state.focus, Focus::History) => {
-            state.move_history_selection_down();
-            Ok(false)
-        }
-        (KeyCode::Backspace, _) => {
+        Action::Backspace => {
             match state.focus {
                 Focus::Input => state.input.backspace(),
                 Focus::Search => {
@@ -89,11 +139,13 @@ pub(crate) fn handle_tui_key(db: &Db, state: &mut TuiState, key: KeyEvent) -> Re
             }
             Ok(false)
         }
-        (KeyCode::Delete, _) if matches!(state.focus, Focus::Input) => {
-            state.input.delete_char();
+        Action::Delete => {
+            if matches!(state.focus, Focus::Input) {
+                state.input.delete_char();
+            }
             Ok(false)
         }
-        (KeyCode::Char(ch), _) => {
+        Action::InsertChar(ch) => {
             match state.focus {
                 Focus::Input => state.input.insert_char(ch),
                 Focus::Search => {
@@ -104,8 +156,25 @@ pub(crate) fn handle_tui_key(db: &Db, state: &mut TuiState, key: KeyEvent) -> Re
             }
             Ok(false)
         }
-        _ => Ok(false),
     }
+}
+
+fn is_submit_key(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    if !modifiers.contains(KeyModifiers::CONTROL) {
+        return false;
+    }
+    matches!(
+        code,
+        KeyCode::Enter
+            | KeyCode::Char('\n')
+            | KeyCode::Char('\r')
+            | KeyCode::Char('m')
+            | KeyCode::Char('j')
+    )
+}
+
+fn is_newline_key(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r'))
 }
 
 fn refresh_history(db: &Db, state: &mut TuiState) -> Result<()> {
